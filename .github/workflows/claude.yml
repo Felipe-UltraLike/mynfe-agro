@@ -1,0 +1,74 @@
+name: Claude Code
+
+# Fluxo com gate de aprovacao:
+#  - Ao ABRIR a issue (@claude): job "analise" -> posta SOMENTE a Analise de Impacto e para.
+#  - Quando o usuario aprova (sistema comenta "@claude APROVADO ..."): job "executar" -> implementa e abre o PR.
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  analise:
+    if: |
+      github.event_name == 'issues' &&
+      (contains(github.event.issue.body, '@claude') || contains(github.event.issue.labels.*.name, 'claude'))
+    runs-on: self-hosted
+    env:
+      # O runner self-hosted (instalado como root) nem sempre exporta HOME para
+      # o job; sem isso a claude-code-action procura o binario em
+      # "undefined/.local/bin/claude" e quebra.
+      HOME: /root
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Claude Code (analise)
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --allowedTools "Bash(gh issue comment:*)"
+            --append-system-prompt "Faca SOMENTE a ANALISE DE IMPACTO e PARE. NAO altere nenhum arquivo, NAO crie branch, NAO de push, NAO abra PR. Investigue o repositorio para identificar telas/componentes e rotas/subrotas do backend afetados, e poste UM comentario na issue usando 'gh issue comment' com EXATAMENTE este formato em portugues do Brasil: primeira linha '## Analise de impacto'; depois '**Alteracao a ser feita:** <texto>'; '**Telas afetadas:** <lista>'; '**Rotinas afetadas (rotas e subrotas backend):** <lista>'; '**Analise do impacto da modificacao:** <texto>'; '**Ranking de impacto (0 a 100):** <N> - Risco BAIXO (0-30), MEDIO (31-70) ou ALTO (71-100)'. Para alteracoes simples use risco BAIXO. Apos postar o comentario, ENCERRE: a implementacao so ocorre apos aprovacao do usuario."
+
+  executar:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: self-hosted
+    env:
+      # O runner self-hosted (instalado como root) nem sempre exporta HOME para
+      # o job; sem isso a claude-code-action procura o binario em
+      # "undefined/.local/bin/claude" e quebra.
+      HOME: /root
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Claude Code (executar)
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --allowedTools "Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh issue comment:*),Bash(git push:*),Bash(git fetch:*),Bash(git checkout:*)"
+            --append-system-prompt "O usuario aprovou a tarefa (ou enviou uma instrucao adicional) via comentario. Implemente a tarefa descrita na issue e atenda o pedido do ultimo comentario. A issue indica a branch de DESTINO do PR na linha 'Branch de destino do PR: <branch>' (padrao main se ausente): rode 'git fetch origin <branch>' e 'git checkout <branch>', crie sua branch de trabalho a partir dela, implemente e, ao concluir e dar push, SEMPRE abra (ou atualize) o Pull Request com 'gh pr create --fill --base <branch>'. Nunca deixe apenas o link de criar PR."
